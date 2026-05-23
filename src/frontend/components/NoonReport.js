@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { parseNoonReport } from '../../backend/services/groq';
 import { listVessels, updateVessel } from '../api/fleet';
 import { listNoonReports, saveNoonReport } from '../api/operations';
 
@@ -28,7 +27,7 @@ export default function NoonReport() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
   const [drag, setDrag] = useState(false);
-  const cargoKxx = value => value ? `${Math.round(Number(value) / 1.25).toLocaleString()} Kxx` : 'â€”';
+  const cargoKxx = value => value ? `${Math.round(Number(value) / 1.25).toLocaleString()} Kxx` : '-';
   const voyageNumber = value => value || parsed?.voyageNumber || parsed?.voyage_number || 'TBC';
   const formatVesselName = value => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase().replace(/\b([a-z])/g, match => match.toUpperCase());
 
@@ -47,8 +46,7 @@ export default function NoonReport() {
     if (!text.trim()) return;
     setParsing(true); setError(''); setParsed(null);
     try {
-      const result = await parseNoonReport(text);
-      setParsed(result);
+      setParsed(parseNoonReportManually(text));
     } catch(e) {
       setError(e.message);
     } finally {
@@ -75,7 +73,8 @@ export default function NoonReport() {
       }
       await saveNoonReport({
         vessel_id: match?.id||null,
-        report_text: text, parsed_data: parsed,
+        report_text: text,
+        parsed_data: parsed,
       });
       setParsed(p => ({ ...p, _applied:true }));
       setHistory(h => [{ id:Date.now(), vessels:{ name:formatVesselName(parsed.vesselName) }, created_at:new Date().toISOString(), cargo_util:parsed.cargoUtil, status:parsed.status }, ...h.slice(0,19)]);
@@ -88,26 +87,26 @@ export default function NoonReport() {
     <div style={{ height:'100%', display:'grid', gridTemplateColumns:'1fr 1fr', overflow:'hidden' }}>
       <div style={{ padding:'16px', overflowY:'auto', borderRight:'1px solid var(--b1)' }}>
         <div style={{ fontFamily:'var(--syne)', fontSize:'16px', fontWeight:700, marginBottom:'4px' }}>Noon Reports</div>
-        <div style={{ fontSize:'10px', color:'var(--t2)', marginBottom:'14px' }}>AI parses & updates fleet data · Groq / Llama 3.1</div>
+        <div style={{ fontSize:'10px', color:'var(--t2)', marginBottom:'14px' }}>Manual extraction for noon report updates</div>
 
         <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)}
           onDrop={e=>{e.preventDefault();setDrag(false);handleFile(e.dataTransfer.files[0]);}}
           onClick={()=>document.getElementById('noon-file').click()}
           style={{ border:`2px dashed ${drag?'var(--accent)':'var(--b2)'}`, borderRadius:'var(--radius)', padding:'24px', textAlign:'center', cursor:'pointer', marginBottom:'12px', background:drag?'rgba(0,212,255,.04)':'none' }}>
           <input id="noon-file" type="file" accept=".txt,.csv" style={{ display:'none' }} onChange={e=>handleFile(e.target.files[0])} />
-          <div style={{ fontSize:'24px', marginBottom:'6px' }}>📋</div>
+          <div style={{ fontSize:'24px', marginBottom:'6px' }}>REPORT</div>
           <div style={{ fontFamily:'var(--syne)', fontSize:'12px', fontWeight:700 }}>Drop noon report here</div>
-          <div style={{ fontSize:'10px', color:'var(--t2)', marginTop:'4px' }}>.txt · .csv</div>
+          <div style={{ fontSize:'10px', color:'var(--t2)', marginTop:'4px' }}>.txt / .csv</div>
         </div>
 
-        <div style={{ textAlign:'center', fontSize:'10px', color:'var(--t3)', margin:'8px 0' }}>— OR PASTE TEXT —</div>
+        <div style={{ textAlign:'center', fontSize:'10px', color:'var(--t3)', margin:'8px 0' }}>OR PASTE TEXT</div>
 
-        <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Paste noon report text here…"
+        <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Paste noon report text here..."
           style={{ width:'100%', minHeight:'130px', resize:'vertical', lineHeight:'1.6', marginBottom:'8px' }} />
 
         <div style={{ display:'flex', gap:'6px', marginBottom:'8px' }}>
-          <button onClick={()=>setText(SAMPLE)} style={{ background:'var(--s2)', border:'1px solid var(--b1)', color:'var(--t2)', fontSize:'9px', padding:'4px 10px', borderRadius:'var(--radius-sm)' }}>↓ Load sample</button>
-          {text && <button onClick={()=>{setText('');setParsed(null);}} style={{ background:'var(--s2)', border:'1px solid var(--b1)', color:'var(--t2)', fontSize:'9px', padding:'4px 10px', borderRadius:'var(--radius-sm)', marginLeft:'auto' }}>✕ Clear</button>}
+          <button onClick={()=>setText(SAMPLE)} style={{ background:'var(--s2)', border:'1px solid var(--b1)', color:'var(--t2)', fontSize:'9px', padding:'4px 10px', borderRadius:'var(--radius-sm)' }}>Load sample</button>
+          {text && <button onClick={()=>{setText('');setParsed(null);}} style={{ background:'var(--s2)', border:'1px solid var(--b1)', color:'var(--t2)', fontSize:'9px', padding:'4px 10px', borderRadius:'var(--radius-sm)', marginLeft:'auto' }}>Clear</button>}
         </div>
 
         <button onClick={handleParse} disabled={!text.trim()||parsing} style={{
@@ -118,7 +117,7 @@ export default function NoonReport() {
           color:(!text.trim()||parsing)?'var(--t2)':'#000',
           cursor:(!text.trim()||parsing)?'not-allowed':'pointer',
         }}>
-          {parsing ? 'PARSING WITH AI…' : '⚡ PARSE & EXTRACT DATA'}
+          {parsing ? 'PARSING REPORT...' : 'PARSE & EXTRACT DATA'}
         </button>
 
         {error && <div style={{ marginTop:'8px', padding:'10px', background:'rgba(255,69,96,.08)', border:'1px solid rgba(255,69,96,.2)', borderRadius:'var(--radius-sm)', fontSize:'10px', color:'var(--red)' }}>{error}</div>}
@@ -131,11 +130,11 @@ export default function NoonReport() {
                 <span style={{ fontSize:9, padding:'2px 7px', borderRadius:4, background:'rgba(255,214,10,.12)', color:'var(--yellow)', border:'1px solid rgba(255,214,10,.45)', fontWeight:800 }}>VOY {voyageNumber()}</span>
               </div>
               {parsed._applied
-                ? <span style={{ fontSize:'9px', background:'rgba(0,232,150,.15)', border:'1px solid var(--green)', color:'var(--green)', padding:'2px 8px', borderRadius:'20px' }}>✓ APPLIED</span>
+                ? <span style={{ fontSize:'9px', background:'rgba(0,232,150,.15)', border:'1px solid var(--green)', color:'var(--green)', padding:'2px 8px', borderRadius:'20px' }}>APPLIED</span>
                 : <span style={{ fontSize:'9px', color:'var(--yellow)' }}>Ready to apply</span>}
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px', marginBottom:'10px' }}>
-              {[['Voyage',voyageNumber()],['Position',parsed.lat!=null?`${Number(parsed.lat).toFixed(2)}°N ${Number(parsed.lon).toFixed(2)}°E`:'—'],['Speed',parsed.speed?`${parsed.speed} kn`:'—'],['Fuel',parsed.fuelConsumed?`${parsed.fuelConsumed} MT`:'—'],['Cargo Kxx',cargoKxx(parsed.cargoLM)],['Utilisation',parsed.cargoUtil?`${parsed.cargoUtil}%`:'—'],['Status',parsed.status||'—'],['Next Port',parsed.nextPort||'—'],['ETA',parsed.eta||'—']].map(([l,v]) => (
+              {[['Voyage',voyageNumber()],['Position',parsed.lat!=null?`${Number(parsed.lat).toFixed(2)} / ${Number(parsed.lon).toFixed(2)}`:'-'],['Speed',parsed.speed?`${parsed.speed} kn`:'-'],['Fuel',parsed.fuelConsumed?`${parsed.fuelConsumed} MT`:'-'],['Cargo Kxx',cargoKxx(parsed.cargoLM)],['Utilisation',parsed.cargoUtil?`${parsed.cargoUtil}%`:'-'],['Status',parsed.status||'-'],['Next Port',parsed.nextPort||'-'],['ETA',parsed.eta||'-']].map(([l,v]) => (
                 <div key={l}>
                   <div style={{ fontSize:'8px', color:'var(--t3)', letterSpacing:'1px', textTransform:'uppercase' }}>{l}</div>
                   <div style={{ fontSize:'11px', marginTop:'2px' }}>{v}</div>
@@ -144,7 +143,7 @@ export default function NoonReport() {
             </div>
             {!parsed._applied && (
               <button onClick={handleApply} style={{ width:'100%', padding:'8px', background:'rgba(0,232,150,.1)', border:'1px solid var(--green)', color:'var(--green)', borderRadius:'var(--radius-sm)', fontSize:'10px', letterSpacing:'1px' }}>
-                ✓ APPLY TO FLEET — UPDATE VESSEL DATA
+                APPLY TO FLEET - UPDATE VESSEL DATA
               </button>
             )}
           </div>
@@ -160,14 +159,68 @@ export default function NoonReport() {
               <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:'var(--green)', flexShrink:0 }} />
               <div style={{ flex:1 }}>
                 <div style={{ color:'var(--text)', fontWeight:500 }}>{formatVesselName(h.vessels?.name)||'Unknown'}</div>
-                <div style={{ fontSize:'9px', color:'var(--t3)', marginTop:'1px' }}>Util: {h.cargo_util||'—'}% · {h.status||'—'}</div>
+                <div style={{ fontSize:'9px', color:'var(--t3)', marginTop:'1px' }}>Util: {h.cargo_util||'-'}% / {h.status||'-'}</div>
               </div>
               <div style={{ fontSize:'9px', color:'var(--t3)' }}>
-                {h.created_at ? new Date(h.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,hourCycle:'h23'}) : '—'}
+                {h.created_at ? new Date(h.created_at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,hourCycle:'h23'}) : '-'}
               </div>
             </div>
           ))}
       </div>
     </div>
   );
+}
+
+function parseNoonReportManually(reportText) {
+  const text = String(reportText || '');
+  const nextPortEta = textValue(text, /ETA\s+Next\s+Port\s*:\s*([^\r\n]+)/i);
+  const position = parsePosition(textValue(text, /Position\s*:\s*([^\r\n]+)/i));
+  return {
+    vesselName: textValue(text, /Vessel\s*:\s*([^\r\n]+)/i),
+    voyageNumber: textValue(text, /Voyage\s+Number\s*:\s*([^\r\n]+)/i),
+    imo: textValue(text, /IMO\s*:\s*(\d{7})/i),
+    reportDate: textValue(text, /Date\/Time\s*:\s*([^\r\n]+)/i),
+    lat: position.lat,
+    lon: position.lon,
+    speed: numberValue(text, /Speed(?:\s+Made\s+Good)?\s*:\s*([0-9.]+)/i),
+    fuelConsumed: sumNumbers(
+      numberValue(text, /HFO\s+Consumed\s*:\s*([0-9.]+)/i),
+      numberValue(text, /MDO\s+Consumed\s*:\s*([0-9.]+)/i),
+      numberValue(text, /Fuel\s+Consumed\s*:\s*([0-9.]+)/i)
+    ),
+    cargoLM: numberValue(text, /Kxx\s+Loaded\s*:\s*([0-9,.]+)/i),
+    cargoUtil: numberValue(text, /Utili[sz]ation\s*:\s*([0-9.]+)/i),
+    nextPort: nextPortEta ? nextPortEta.split(',')[0].trim() : '',
+    eta: nextPortEta,
+    status: 'sea',
+    distanceSailed: numberValue(text, /Distance\s+Sailed\s*:\s*([0-9.]+)/i),
+    windForce: numberValue(text, /Wind\s*:\s*[A-Z]*\s*([0-9.]+)/i),
+    waveHeight: numberValue(text, /Swell\s*:\s*([0-9.]+)/i),
+  };
+}
+
+function textValue(text, pattern) {
+  const match = text.match(pattern);
+  return match ? match[1].trim() : '';
+}
+
+function numberValue(text, pattern) {
+  const value = textValue(text, pattern).replace(/,/g, '');
+  return value ? Number(value) : null;
+}
+
+function sumNumbers(...values) {
+  const numbers = values.filter(value => value !== null && !Number.isNaN(value));
+  return numbers.length ? numbers.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function parsePosition(value) {
+  const match = String(value || '').match(/([0-9.]+)[°\s]*([0-9.]*)'?([NS])\s+([0-9.]+)[°\s]*([0-9.]*)'?([EW])/i);
+  if (!match) return { lat:null, lon:null };
+  const lat = Number(match[1]) + Number(match[2] || 0) / 60;
+  const lon = Number(match[4]) + Number(match[5] || 0) / 60;
+  return {
+    lat: match[3].toUpperCase() === 'S' ? -lat : lat,
+    lon: match[6].toUpperCase() === 'W' ? -lon : lon,
+  };
 }

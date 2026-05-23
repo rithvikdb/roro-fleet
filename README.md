@@ -16,7 +16,7 @@ roro-fleet/
       styles/                   # Global CSS
     backend/                    # Browser-safe frontend service helpers
       services/
-        groq.js                 # Groq API client for noon report parsing
+        aiAdapters.js           # Disabled placeholder for future AI adapters
   public/                       # Static public assets used by React
   backend/                      # FastAPI backend
     app/
@@ -52,14 +52,13 @@ The backend API lives in `backend/app` and is served by FastAPI.
 - `backend/app/main.py` creates the FastAPI app.
 - `backend/app/api/` contains HTTP route modules.
 - `backend/app/repositories/` contains PostgreSQL data access.
-- `groq.js` calls the Groq chat completions API to parse noon reports into structured JSON.
+- `aiAdapters.js` is a disabled placeholder for future server-side AI integrations.
 - `vesselLookup.js` calls the local `/api/vessel-lookup` endpoint used by Add Vessel.
 
 Required backend environment variables are read from `.env`:
 
 ```text
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/roro_fleet
-REACT_APP_GROQ_API_KEY=
 ```
 
 Never put PostgreSQL credentials in `REACT_APP_*` variables. Those are bundled into the browser.

@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     session_cookie_name: str = "roro_session"
     session_days: int = 14
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:5181"
-    groq_api_key: str | None = None
 
 
 @lru_cache
