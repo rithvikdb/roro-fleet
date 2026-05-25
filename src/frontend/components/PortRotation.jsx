@@ -1,5 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell as ChartCell,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
   deleteScheduleRecord,
   isMissingScheduleTable,
   listCustomPorts,
@@ -7,7 +22,7 @@ import {
   saveCustomPortRecord,
   saveScheduleRecord,
 } from '../../backend/services/scheduleRepository';
-import { listBunkerReports, listVoyagePlans, saveVoyagePlan } from '../api/operations';
+import { listBunkerReports, listNoonReports, listVoyagePlans, saveVoyagePlan } from '../api/operations';
 import { listMyVessels, listVessels } from '../api/fleet';
 import {
   PORT_DICTIONARY,
@@ -35,6 +50,16 @@ const TRADE_TAGS = [
   { code: 'TAL', label: 'Transatlantic / US-Mex East Coast' },
   { code: 'NAS', label: 'US East Coast' },
   { code: 'EUROZFE', label: 'Asia-Europe' },
+];
+
+const CII_BG = { A: '#00c853', B: '#69f0ae', C: '#ffd60a', D: '#ff6b35', E: '#ff4560' };
+const CO2_FACTOR_MT_PER_MT_FUEL = 3.114;
+const CII_BOUNDARIES = [
+  { grade: 'A', max: 6.0 },
+  { grade: 'B', max: 8.0 },
+  { grade: 'C', max: 10.0 },
+  { grade: 'D', max: 12.0 },
+  { grade: 'E', max: Infinity },
 ];
 
 const INITIAL_ROWS = [
@@ -67,6 +92,26 @@ function makeRow(portCode, values, ports = INITIAL_PORTS) {
 function asNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function ciiGrade(score) {
+  const boundary = CII_BOUNDARIES.find((item) => score <= item.max);
+  return boundary ? boundary.grade : 'E';
+}
+
+function ciiColor(grade) {
+  return CII_BG[grade] || '#7a9bb5';
+}
+
+function fuelRateForSpeed(speed, baseSpeed, baseRate) {
+  const safeSpeed = Math.max(1, asNumber(speed));
+  const safeBaseSpeed = Math.max(1, asNumber(baseSpeed) || 17);
+  const safeBaseRate = Math.max(0, asNumber(baseRate));
+  return safeBaseRate * Math.pow(safeSpeed / safeBaseSpeed, 3);
 }
 
 function isValidDate(date) {
@@ -277,6 +322,32 @@ function bunkerTotalCost(bunker) {
   return bunkerFuelLines(bunker).reduce((sum, fuel) => sum + (asNumber(fuel.quantity) * asNumber(fuel.pricePerMT)), 0);
 }
 
+function parsedNoonData(report) {
+  return report?.parsed_data || report?.parsedData || {};
+}
+
+function noonVesselName(report) {
+  const data = parsedNoonData(report);
+  return data.vesselName || data.vessel || report?.vessel_name || report?.vesselName || report?.vessels?.name || '';
+}
+
+function noonVoyageNumber(report) {
+  const data = parsedNoonData(report);
+  return String(data.voyageNumber || data.voyage_number || report?.voyage_number || report?.voyageNumber || 'TBC');
+}
+
+function noonDateValue(report) {
+  const data = parsedNoonData(report);
+  return data.reportDate || data.report_date || report?.created_at || report?.createdAt || '';
+}
+
+function noonTimestamp(report) {
+  const parsed = new Date(noonDateValue(report));
+  if (isValidDate(parsed)) return parsed.getTime();
+  const created = new Date(report?.created_at || report?.createdAt);
+  return isValidDate(created) ? created.getTime() : 0;
+}
+
 // eslint-disable-next-line no-unused-vars
 function VoyageBadge({ value }) {
   const pending = !value;
@@ -314,6 +385,7 @@ export default function PortRotation({ selectedVessel, mode = 'schedule' } = {})
   const [instructionStatus, setInstructionStatus] = useState('');
   const [instructionTab, setInstructionTab] = useState('voyage');
   const [bunkerReports, setBunkerReports] = useState([]);
+  const [noonReports, setNoonReports] = useState([]);
   const [fleetVessels, setFleetVessels] = useState([]);
   const [showPlanDetails, setShowPlanDetails] = useState(false);
   const [planTab, setPlanTab] = useState('schedule');
@@ -409,6 +481,21 @@ export default function PortRotation({ selectedVessel, mode = 'schedule' } = {})
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+    function refreshNoonReports() {
+      listNoonReports().then((reports) => {
+        if (mounted) setNoonReports(reports || []);
+      }).catch(() => {});
+    }
+    refreshNoonReports();
+    window.addEventListener('focus', refreshNoonReports);
+    return () => {
+      mounted = false;
+      window.removeEventListener('focus', refreshNoonReports);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedVessel) return;
     setVesselOptions((current) => current.includes(selectedVessel) ? current : [selectedVessel].concat(current));
     setVessel(selectedVessel);
@@ -476,6 +563,131 @@ export default function PortRotation({ selectedVessel, mode = 'schedule' } = {})
     return items.concat(bunkerByPort[portCompareKey(row.portName)] || bunkerByPort[portCompareKey(row.portCode)] || []);
   }, []);
   const linkedBunkerCost = linkedBunkers.reduce((sum, bunker) => sum + bunkerTotalCost(bunker), 0);
+  const voyageNoonReports = useMemo(() => {
+    const currentVessel = formatVesselName(vessel);
+    const currentVoyage = String(voyageNumber || 'TBC');
+    return (noonReports || [])
+      .filter((report) => {
+        const reportVessel = formatVesselName(noonVesselName(report));
+        const sameVessel = reportVessel && currentVessel && (reportVessel === currentVessel || reportVessel.includes(currentVessel) || currentVessel.includes(reportVessel));
+        const reportVoyage = noonVoyageNumber(report);
+        const sameVoyage = !currentVoyage || currentVoyage === 'TBC' || reportVoyage === currentVoyage || reportVoyage === 'TBC';
+        return sameVessel && sameVoyage;
+      })
+      .sort((a, b) => noonTimestamp(a) - noonTimestamp(b));
+  }, [noonReports, vessel, voyageNumber]);
+  const performanceModel = useMemo(() => {
+    const designSpeed = asNumber(vesselDetails?.speed) || avgSpeed || 17;
+    const cargoProxy = Math.max(1, asNumber(vesselDetails?.lane_meters) * (asNumber(vesselDetails?.cargo_util) || 85) / 100 || 4200);
+    const seaRows = calculated.filter((row) => asNumber(row.distance) > 0);
+    const noonLegData = voyageNoonReports.map((report, index) => {
+      const data = parsedNoonData(report);
+      const speed = asNumber(data.speed || data.speedMadeGood || data.speed_made_good);
+      const distance = asNumber(data.distanceSailed || data.distance_sailed || data.distance);
+      const fuelMt = asNumber(data.fuelConsumed || data.fuel_consumed)
+        || asNumber(data.hfoConsumed || data.hfo_consumed)
+        + asNumber(data.mdoConsumed || data.mdo_consumed)
+        + asNumber(data.lsmgoConsumed || data.lsmgo_consumed);
+      const co2 = fuelMt * CO2_FACTOR_MT_PER_MT_FUEL;
+      const cii = distance > 0 ? (co2 * 1000000) / (cargoProxy * distance) : 0;
+      const reportDate = noonDateValue(report);
+      return {
+        name: data.reportDate ? dateValue(new Date(data.reportDate)) : `Noon ${index + 1}`,
+        port: data.nextPort || data.etaNextPort || data.eta_next_port || `Noon report ${index + 1}`,
+        speed: Number(speed.toFixed(1)),
+        hours: speed > 0 && distance > 0 ? Number((distance / speed).toFixed(1)) : 0,
+        distance: Number(distance.toFixed(0)),
+        fuel: Number(fuelMt.toFixed(1)),
+        co2: Number(co2.toFixed(0)),
+        cii: Number(cii.toFixed(2)),
+        grade: ciiGrade(cii),
+        reportDate,
+        lat: data.lat,
+        lon: data.lon,
+        cargoUtil: data.cargoUtil || data.cargo_util,
+        cargoLM: data.cargoLM || data.cargo_lm,
+        hfoConsumed: data.hfoConsumed || data.hfo_consumed,
+        mdoConsumed: data.mdoConsumed || data.mdo_consumed,
+        windForce: data.windForce || data.wind_force,
+        waveHeight: data.waveHeight || data.wave_height,
+        source: 'noon',
+      };
+    }).filter((row) => row.distance > 0 || row.fuel > 0 || row.speed > 0);
+    const plannedLegData = seaRows.map((row, index) => {
+      const speed = Math.max(1, asNumber(row.speed));
+      const hours = asNumber(row.steamingHours);
+      const vlsfoRate = fuelRateForSpeed(speed, designSpeed, fuel.vlsfoRate);
+      const vlsfo = hours * vlsfoRate;
+      const lsmgo = index === 0 ? 0 : fuel.lsmgoRate;
+      const fuelMt = vlsfo + lsmgo;
+      const co2 = fuelMt * CO2_FACTOR_MT_PER_MT_FUEL;
+      const distance = asNumber(row.distance);
+      const cii = distance > 0 ? (co2 * 1000000) / (cargoProxy * distance) : 0;
+      return {
+        name: `${calculated[index]?.portCode || 'P'}-${row.portCode || index + 1}`,
+        port: row.portName || row.portCode || `Leg ${index + 1}`,
+        speed: Number(speed.toFixed(1)),
+        hours: Number(hours.toFixed(1)),
+        distance: Number(distance.toFixed(0)),
+        fuel: Number(fuelMt.toFixed(1)),
+        co2: Number(co2.toFixed(0)),
+        cii: Number(cii.toFixed(2)),
+        grade: ciiGrade(cii),
+        source: 'planned',
+      };
+    });
+    const legData = noonLegData.length ? noonLegData : plannedLegData;
+    const totals = legData.reduce((sum, leg) => ({
+      distance: sum.distance + leg.distance,
+      fuel: sum.fuel + leg.fuel,
+      co2: sum.co2 + leg.co2,
+      hours: sum.hours + leg.hours,
+    }), { distance: 0, fuel: 0, co2: 0, hours: 0 });
+    const ciiScore = totals.distance > 0 ? (totals.co2 * 1000000) / (cargoProxy * totals.distance) : 0;
+    const scenarios = [-2, -1, 0, 1, 2].map((delta) => {
+      const scenarioRows = seaRows.map((row) => {
+        const speed = clamp(asNumber(row.speed) + delta, 10, 22);
+        const hours = asNumber(row.distance) / speed;
+        const fuelMt = hours * fuelRateForSpeed(speed, designSpeed, fuel.vlsfoRate) + fuel.lsmgoRate;
+        return { speed, hours, fuelMt, co2: fuelMt * CO2_FACTOR_MT_PER_MT_FUEL };
+      });
+      const distance = seaRows.reduce((sum, row) => sum + asNumber(row.distance), 0);
+      const hours = scenarioRows.reduce((sum, row) => sum + row.hours, 0);
+      const fuelMt = scenarioRows.reduce((sum, row) => sum + row.fuelMt, 0);
+      const co2 = scenarioRows.reduce((sum, row) => sum + row.co2, 0);
+      const score = distance > 0 ? (co2 * 1000000) / (cargoProxy * distance) : 0;
+      const label = delta === 0 ? 'Current' : `${delta > 0 ? '+' : ''}${delta} kn`;
+      return {
+        label,
+        delta,
+        avgSpeed: Number((seaRows.length ? scenarioRows.reduce((sum, row) => sum + row.speed, 0) / seaRows.length : 0).toFixed(1)),
+        hours: Number(hours.toFixed(1)),
+        fuel: Number(fuelMt.toFixed(1)),
+        co2: Number(co2.toFixed(0)),
+        cii: Number(score.toFixed(2)),
+        grade: ciiGrade(score),
+      };
+    });
+    const best = scenarios.reduce((candidate, scenario) => {
+      if (!candidate) return scenario;
+      if (scenario.grade < candidate.grade) return scenario;
+      if (scenario.grade === candidate.grade && scenario.cii < candidate.cii) return scenario;
+      return candidate;
+    }, null);
+    return {
+      designSpeed,
+      cargoProxy,
+      legData,
+      noonLegData,
+      plannedLegData,
+      totals,
+      ciiScore: Number(ciiScore.toFixed(2)),
+      ciiGrade: ciiGrade(ciiScore),
+      scenarios,
+      best,
+      dataSource: noonLegData.length ? 'Noon reports' : 'Planned schedule',
+    };
+  }, [calculated, vesselDetails, avgSpeed, fuel.vlsfoRate, fuel.lsmgoRate, voyageNoonReports]);
   const instructionDocuments = useMemo(() => {
     function documentText(title, body) {
       const lines = [];
@@ -853,13 +1065,19 @@ export default function PortRotation({ selectedVessel, mode = 'schedule' } = {})
   }
 
   function renderPerformancePanel() {
+    const ciiBadge = (
+      <span style={{ display: 'inline-block', width: 22, height: 22, borderRadius: 3, background: ciiColor(performanceModel.ciiGrade), color: '#000', fontSize: 12, fontWeight: 800, textAlign: 'center', lineHeight: '22px' }}>
+        {performanceModel.ciiGrade}
+      </span>
+    );
+
     return (
       <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'grid', gridTemplateColumns: '1.15fr 1fr 1fr', gap: 12, alignContent: 'start' }}>
         <Summary title="Vessel Performance">
           <Metric label="Design speed" value={vesselDetails?.speed ? `${vesselDetails.speed} kn` : `${avgSpeed.toFixed(1)} kn`} />
           <Metric label="Cargo util." value={vesselDetails?.cargo_util ? `${vesselDetails.cargo_util}%` : 'TBC'} accent />
           <Metric label="Kxx" value={kxxText(vesselDetails?.lane_meters)} />
-          <Metric label="CII" value={vesselDetails?.cii_rating || 'TBC'} />
+          <Metric label="CII" value={ciiBadge} />
           <Metric label="Propulsion" value={vesselDetails?.propulsion || 'TBC'} />
           <Metric label="Total steam" value={`${totalSteam.toFixed(1)} h`} />
         </Summary>
@@ -874,10 +1092,101 @@ export default function PortRotation({ selectedVessel, mode = 'schedule' } = {})
           <Metric label="Costs" value={currency(lsmgoCons * fuel.lsmgoPrice)} accent />
         </Summary>
         <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
-          <MetricCard label="Total distance" value={`${totalDistance.toLocaleString()} NM`} />
-          <MetricCard label="Port calls" value={String(calculated.length)} />
-          <MetricCard label="Total fuel cost" value={currency(totalFuelCost)} accent />
-          <MetricCard label="Next port" value={calculated[1]?.portName || calculated[0]?.portName || 'TBC'} />
+          <MetricCard label="Data source" value={performanceModel.dataSource} accent={performanceModel.noonLegData.length > 0} />
+          <MetricCard label="Noon reports" value={String(voyageNoonReports.length)} />
+          <MetricCard label="Reported distance" value={`${performanceModel.totals.distance.toLocaleString()} NM`} />
+          <MetricCard label="Reported fuel" value={`${performanceModel.totals.fuel.toLocaleString()} MT`} accent />
+        </div>
+
+        <ChartPanel title="Vessel Performance Profile" subtitle={`${performanceModel.dataSource}: speed, fuel burn, and CO2 output`}>
+          {performanceModel.legData.length ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={performanceModel.legData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+                <CartesianGrid stroke="rgba(122,155,181,.16)" vertical={false} />
+                <XAxis dataKey="name" tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={{ stroke: 'rgba(122,155,181,.25)' }} tickLine={false} />
+                <YAxis yAxisId="left" tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: 'var(--text)' }} />
+                <Legend wrapperStyle={{ color: 'var(--t2)', fontSize: 10 }} />
+                <Bar yAxisId="left" dataKey="fuel" name="Fuel MT" radius={[3, 3, 0, 0]} fill="#00d4ff" />
+                <Line yAxisId="right" type="monotone" dataKey="speed" name="Speed kn" stroke="#ffd60a" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="right" type="monotone" dataKey="co2" name="CO2 MT" stroke="#00e896" strokeWidth={2} dot={{ r: 3 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartText>No sailing legs with distance entered.</EmptyChartText>
+          )}
+        </ChartPanel>
+
+        <ChartPanel title="CII Optimizer" subtitle={`Current ${performanceModel.ciiScore} gCO2/unit-nm · best ${performanceModel.best?.label || 'TBC'}`}>
+          {performanceModel.scenarios.length ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={performanceModel.scenarios} margin={{ top: 12, right: 8, bottom: 4, left: 0 }}>
+                <CartesianGrid stroke="rgba(122,155,181,.16)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={{ stroke: 'rgba(122,155,181,.25)' }} tickLine={false} />
+                <YAxis tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: 'var(--text)' }} />
+                <Bar dataKey="cii" name="CII score" radius={[3, 3, 0, 0]}>
+                  {performanceModel.scenarios.map((scenario) => (
+                    <ChartCell key={scenario.label} fill={ciiColor(scenario.grade)} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartText>No optimizer scenarios available.</EmptyChartText>
+          )}
+        </ChartPanel>
+
+        <ChartPanel title="Cumulative Emissions" subtitle="CO2 accumulation over the voyage plan">
+          {performanceModel.legData.length ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={performanceModel.legData.reduce((items, leg) => {
+                const previous = items[items.length - 1]?.cumulativeCo2 || 0;
+                return items.concat({ ...leg, cumulativeCo2: Number((previous + leg.co2).toFixed(0)) });
+              }, [])} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
+                <CartesianGrid stroke="rgba(122,155,181,.16)" vertical={false} />
+                <XAxis dataKey="name" tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={{ stroke: 'rgba(122,155,181,.25)' }} tickLine={false} />
+                <YAxis tick={{ fill: '#7a9bb5', fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: 'var(--text)' }} />
+                <Area type="monotone" dataKey="cumulativeCo2" name="CO2 MT" stroke="#00d4ff" fill="rgba(0,212,255,.18)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartText>No emissions data available.</EmptyChartText>
+          )}
+        </ChartPanel>
+
+        <div style={{ border: '1px solid var(--b1)', borderRadius: 6, background: 'var(--s2)', padding: 12, minWidth: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>Optimizer Scenarios</div>
+            <div style={{ fontSize: 10, color: 'var(--t3)' }}>Speed change vs current route legs</div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+              <thead>
+                <tr>
+                  {['Scenario', 'Avg speed', 'Steam', 'Fuel', 'CO2', 'CII'].map((label) => (
+                    <th key={label} style={miniHeaderCell}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {performanceModel.scenarios.map((scenario) => (
+                  <tr key={scenario.label} style={{ background: scenario.delta === 0 ? 'rgba(0,212,255,.07)' : 'transparent' }}>
+                    <td style={miniBodyCell}>{scenario.label}</td>
+                    <td style={miniBodyCell}>{scenario.avgSpeed} kn</td>
+                    <td style={miniBodyCell}>{scenario.hours} h</td>
+                    <td style={miniBodyCell}>{scenario.fuel} MT</td>
+                    <td style={miniBodyCell}>{scenario.co2.toLocaleString()} MT</td>
+                    <td style={miniBodyCell}>
+                      <span style={{ display: 'inline-block', minWidth: 52, padding: '3px 7px', borderRadius: 3, background: ciiColor(scenario.grade), color: '#000', fontWeight: 800 }}>{scenario.grade} · {scenario.cii}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -1382,6 +1691,26 @@ function FuelInput({ label, value, onChange }) {
   );
 }
 
+function ChartPanel({ title, subtitle, children }) {
+  return (
+    <div style={{ border: '1px solid var(--b1)', borderRadius: 6, background: 'var(--s2)', padding: 12, minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+        <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: 1.4, textTransform: 'uppercase', fontWeight: 800 }}>{title}</div>
+        <div style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtitle}</div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyChartText({ children }) {
+  return (
+    <div style={{ height: 220, display: 'grid', placeItems: 'center', color: 'var(--t3)', fontSize: 11, border: '1px dashed var(--b1)', borderRadius: 6 }}>
+      {children}
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <label>
@@ -1564,4 +1893,32 @@ const dangerButton = {
   color: 'var(--red)',
   borderColor: 'var(--red)',
   background: 'rgba(255,69,96,.08)',
+};
+
+const chartTooltipStyle = {
+  background: '#081421',
+  border: '1px solid var(--b1)',
+  borderRadius: 6,
+  color: 'var(--text)',
+  fontSize: 11,
+};
+
+const miniHeaderCell = {
+  color: 'var(--t3)',
+  fontSize: 8,
+  letterSpacing: 1.3,
+  textTransform: 'uppercase',
+  textAlign: 'left',
+  padding: '7px 8px',
+  borderBottom: '1px solid var(--b1)',
+  background: 'rgba(7,12,20,.5)',
+  whiteSpace: 'nowrap',
+};
+
+const miniBodyCell = {
+  color: 'var(--t2)',
+  fontSize: 10,
+  padding: '7px 8px',
+  borderBottom: '1px solid rgba(49,91,115,.35)',
+  whiteSpace: 'nowrap',
 };

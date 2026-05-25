@@ -153,6 +153,20 @@ function collectRelevantPorts(vessels, ports) {
   return Object.keys(byKey).map(function(key) { return byKey[key]; });
 }
 
+function removeLeafletLayer(layer) {
+  if (!layer) return;
+  try {
+    layer.remove();
+  } catch {
+    // Leaflet can throw if React already removed the map during a remount.
+  }
+}
+
+function clearLeafletLayers(ref) {
+  (ref.current || []).forEach(removeLeafletLayer);
+  ref.current = [];
+}
+
 function tradeBadge(vessel) {
   var trade = getTrade(vessel);
   return React.createElement('span', { title:trade.label, style:{ fontSize:'8px', padding:'2px 6px', borderRadius:'4px', background:trade.color+'18', color:trade.color, border:'1px solid '+trade.color+'55', fontWeight:700, letterSpacing:'.5px', whiteSpace:'nowrap' } }, trade.code);
@@ -667,16 +681,24 @@ function LeafletWorldMap(props) {
 
   useEffect(function() {
     if (!containerRef.current || mapRef.current) return;
-    mapRef.current = L.map(containerRef.current, {
-      center:[20, 5],
-      zoom:2,
-      minZoom:2,
-      maxZoom:6,
-      worldCopyJump:true,
-      zoomControl:true,
-      attributionControl:false,
-      preferCanvas:true,
-    });
+    var container = containerRef.current;
+    if (container._leaflet_id) delete container._leaflet_id;
+    try {
+      mapRef.current = L.map(container, {
+        center:[20, 5],
+        zoom:2,
+        minZoom:2,
+        maxZoom:6,
+        worldCopyJump:true,
+        zoomControl:true,
+        attributionControl:false,
+        preferCanvas:true,
+      });
+    } catch (error) {
+      console.warn('Fleet map initialization failed.', error.message);
+      mapRef.current = null;
+      return undefined;
+    }
     L.control.attribution({ prefix:false }).addAttribution('Natural Earth / OpenStreetMap').addTo(mapRef.current);
     WORLD_OFFSETS.forEach(function(offset) {
       [-60,-30,0,30,60].forEach(function(lat) {
@@ -710,29 +732,33 @@ function LeafletWorldMap(props) {
     }).catch(function() {});
     setTimeout(function(){ if (mapRef.current) mapRef.current.invalidateSize(true); }, 120);
     return function() {
-      gridRef.current.forEach(function(line) { line.remove(); });
-      gridRef.current = [];
+      clearLeafletLayers(markersRef);
+      clearLeafletLayers(portMarkersRef);
+      clearLeafletLayers(routeLinesRef);
+      clearLeafletLayers(seaLabelsRef);
+      clearLeafletLayers(gridRef);
       if (landRef.current) {
-        landRef.current.remove();
+        removeLeafletLayer(landRef.current);
         landRef.current = null;
       }
       if (mapRef.current) {
-        mapRef.current.remove();
+        try {
+          mapRef.current.remove();
+        } catch {
+          // Ignore Leaflet cleanup races during React remounts.
+        }
         mapRef.current = null;
       }
+      if (container._leaflet_id) delete container._leaflet_id;
     };
   }, []);
 
   useEffect(function() {
     if (!mapRef.current) return;
-    markersRef.current.forEach(function(marker) { marker.remove(); });
-    markersRef.current = [];
-    portMarkersRef.current.forEach(function(marker) { marker.remove(); });
-    portMarkersRef.current = [];
-    routeLinesRef.current.forEach(function(line) { line.remove(); });
-    routeLinesRef.current = [];
-    seaLabelsRef.current.forEach(function(label) { label.remove(); });
-    seaLabelsRef.current = [];
+    clearLeafletLayers(markersRef);
+    clearLeafletLayers(portMarkersRef);
+    clearLeafletLayers(routeLinesRef);
+    clearLeafletLayers(seaLabelsRef);
     WORLD_OFFSETS.forEach(function(offset) {
       SEA_LABELS.forEach(function(label) {
         var seaIcon = L.divIcon({
