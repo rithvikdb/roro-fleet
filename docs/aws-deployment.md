@@ -18,7 +18,7 @@ git commit -m "Prepare RORO Fleet for AWS testing"
 
 ```powershell
 aws configure
-.\deploy\create-codecommit-repo.ps1 -RepositoryName roro-fleet -Region us-east-1
+.\deploy\create-codecommit-repo.ps1 -RepositoryName roro-fleet -Region eu-central-1
 ```
 
 The script creates the CodeCommit repository if it does not exist, sets `origin`, and pushes `main`.
