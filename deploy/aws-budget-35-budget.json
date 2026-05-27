@@ -1,0 +1,9 @@
+{
+  "BudgetName": "roro-fleet-test-budget",
+  "BudgetLimit": {
+    "Amount": "35",
+    "Unit": "USD"
+  },
+  "TimeUnit": "MONTHLY",
+  "BudgetType": "COST"
+}
