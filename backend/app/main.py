@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.api import auth, fleet, integrations, migration, operations
 from backend.app.core.config import get_settings
@@ -27,3 +30,8 @@ app.include_router(operations.router)
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+build_dir = Path(__file__).resolve().parents[2] / "build"
+if build_dir.exists():
+    app.mount("/", StaticFiles(directory=build_dir, html=True), name="frontend")

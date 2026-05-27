@@ -12,6 +12,7 @@ __pycache__/
 
 # production
 /build
+/build-verify
 /tmp_sea_routes
 /tmp_docx_extract
 

@@ -1,4 +1,6 @@
-# RORO Fleet AWS Deployment
+# RORO Fleet AWS Test Deployment
+
+This guide is for short AWS testing only. The account may have a six-month Free Plan and USD 100 credits, but AWS services are still metered. Keep resources small, set budget alerts first, and delete test resources when finished.
 
 This app has three deployable parts:
 
@@ -6,42 +8,79 @@ This app has three deployable parts:
 - FastAPI backend: `backend.app.main:app`
 - PostgreSQL database: schema in `deploy/postgresql-core-schema.sql`
 
-## 1. Create The Git Repository
+## 0. Cost Guardrails First
 
-```powershell
-git status
-git add .
-git commit -m "Prepare RORO Fleet for AWS testing"
-```
+Do this before creating RDS, App Runner, Amplify, NAT gateways, load balancers, or custom domains.
 
-### Option A: AWS CodeCommit
+1. Open AWS Console > Billing and Cost Management > Budgets.
+2. Create a monthly cost budget named `roro-fleet-test-budget`.
+3. Set budget amount to `5 USD` for first test runs.
+4. Add alerts at `50%`, `80%`, and `100%`.
+5. Confirm the account is on the Free Plan and still has credits available.
+6. Use one region only: `eu-central-1`.
+
+Avoid these for testing unless you explicitly accept costs:
+
+- NAT Gateway
+- Multi-AZ RDS
+- RDS storage above the free/credit test allowance
+- App Runner always-on services left running after testing
+- Route 53 hosted zones or custom domains
+- Large CloudWatch log retention
+
+## 1. AWS CLI Login
+
+Use the AWS CLI only after the budget exists.
 
 ```powershell
 aws configure
-.\deploy\create-codecommit-repo.ps1 -RepositoryName roro-fleet -Region eu-central-1
+aws sts get-caller-identity
 ```
 
-The script creates the CodeCommit repository if it does not exist, sets `origin`, and pushes `main`.
+Use default region:
 
-### Option B: GitHub
+```text
+eu-central-1
+```
 
-Create an empty GitHub repository, then connect this local repo:
+If using IAM Identity Center/SSO:
 
 ```powershell
-git remote add github https://github.com/<org-or-user>/roro-fleet.git
-git push -u github main
+aws configure sso
+aws sso login
+aws sts get-caller-identity
 ```
 
-## 2. Create PostgreSQL On AWS
+## 2. Keep GitHub As The Source Repository
 
-Use Amazon RDS PostgreSQL.
+The local repository already uses GitHub as `origin`. For the minimum test path, keep that and avoid creating a separate CodeCommit repository.
 
-1. Open AWS Console > RDS > Create database.
-2. Choose PostgreSQL.
-3. For testing, choose a small burstable instance.
-4. Create database name `roro_fleet`.
-5. Store the generated username, password, host, and port.
-6. In the RDS security group, allow inbound PostgreSQL `5432` from the backend service security group only.
+```powershell
+git status
+git remote -v
+git push origin main
+```
+
+## 3. Create A Minimal PostgreSQL Database
+
+Use Amazon RDS PostgreSQL only for a short test window.
+
+Settings:
+
+- Engine: PostgreSQL
+- Template: Free tier or lowest-cost test template available in the account
+- Deployment: Single-AZ
+- Instance class: `db.t4g.micro` or `db.t3.micro`
+- Storage: `20 GB` or lower if the console allows it
+- Storage autoscaling: off
+- Public access: off when possible
+- Backups: shortest retention available for testing
+- Database name: `roro_fleet`
+
+Security group:
+
+- Allow inbound PostgreSQL `5432` only from the backend service security group.
+- Do not allow `0.0.0.0/0` unless this is a temporary manual schema-load step, and remove it immediately afterward.
 
 Apply the schema from a machine that can reach RDS:
 
@@ -49,26 +88,30 @@ Apply the schema from a machine that can reach RDS:
 psql "postgresql://<user>:<password>@<rds-host>:5432/roro_fleet" -f deploy/postgresql-core-schema.sql
 ```
 
-## 3. Deploy The Backend
+If `psql` is unavailable locally, use AWS CloudShell or install PostgreSQL client tools locally.
 
-Recommended testing service: AWS App Runner.
+## 4. Deploy The Backend For Short Tests
+
+AWS App Runner is convenient, but it is metered. Create it only when ready to test, pause/delete it after testing, and monitor the budget.
 
 1. AWS Console > App Runner > Create service.
 2. Source: GitHub repository.
 3. Runtime: Python 3.
-4. Build command:
+4. Use the smallest CPU/memory option available.
+5. Disable automatic deployments for cost control.
+6. Build command:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-5. Start command:
+7. Start command:
 
 ```bash
 python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 
-6. Set environment variables:
+8. Set environment variables:
 
 ```text
 DATABASE_URL=postgresql://<user>:<password>@<rds-host>:5432/roro_fleet
@@ -83,14 +126,15 @@ After deploy, confirm:
 https://<backend-service-url>/api/health
 ```
 
-## 4. Deploy The Frontend
+## 5. Deploy The Frontend For Short Tests
 
-Recommended testing service: AWS Amplify Hosting.
+AWS Amplify Hosting is also metered after free/credit limits. Use it only for the test window.
 
 1. AWS Console > Amplify > Host web app.
-2. Connect the same GitHub repo.
+2. Connect the GitHub repo.
 3. App root: repository root.
-4. Build settings:
+4. Disable automatic deploys if you want manual cost control.
+5. Build settings:
 
 ```yaml
 version: 1
@@ -111,15 +155,15 @@ frontend:
       - node_modules/**/*
 ```
 
-5. Add Amplify environment variable:
+6. Add Amplify environment variable:
 
 ```text
 REACT_APP_API_BASE_URL=https://<backend-service-url>
 ```
 
-6. Redeploy frontend after setting the variable.
+7. Redeploy frontend after setting the variable.
 
-## 5. Final Checks
+## 6. Test Checklist
 
 1. Open the Amplify frontend URL.
 2. Register or log in.
@@ -128,14 +172,33 @@ REACT_APP_API_BASE_URL=https://<backend-service-url>
 5. Return to Fleet > Map and refresh noon positions.
 6. Open Voyage Plan > Performance and confirm charts render from backend noon report data.
 
-## 6. Production Hardening
+## 7. Stop Costs After Testing
 
-- Move database credentials to AWS Secrets Manager.
-- Restrict RDS inbound access to backend only.
-- Add a custom domain in Amplify and App Runner.
-- Update `CORS_ORIGINS` to the final frontend domain.
-- Add CI build checks before merge:
+Do this at the end of every test session:
+
+1. Delete or pause the App Runner service.
+2. Delete the Amplify app if the test is complete.
+3. Stop or delete the RDS instance. Delete it if there is no data to keep.
+4. Delete manual snapshots that are no longer needed.
+5. Check Billing > Bills and Cost Explorer the next day.
+
+For a hard cleanup:
 
 ```powershell
-npm run build
+aws apprunner list-services --region eu-central-1
+aws amplify list-apps --region eu-central-1
+aws rds describe-db-instances --region eu-central-1
 ```
+
+Delete the listed RORO Fleet test resources from the console after confirming names and ARNs.
+
+## 8. Production Hardening Later
+
+Do not do these during the minimum-cost test unless required:
+
+- Move database credentials to AWS Secrets Manager.
+- Add custom domains.
+- Add Route 53 hosted zones.
+- Add managed NAT gateways.
+- Enable larger RDS instances or Multi-AZ.
+- Increase CloudWatch log retention.
