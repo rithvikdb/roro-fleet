@@ -41,3 +41,11 @@ if [ ! -f .env ]; then
 fi
 
 docker compose -f docker-compose.aws-test.yml up -d --build
+
+sleep 30
+docker compose -f docker-compose.aws-test.yml ps || true
+docker ps -a || true
+ss -ltnp || true
+curl -v --max-time 10 http://127.0.0.1/api/health || true
+curl -v --max-time 10 http://127.0.0.1:8000/api/health || true
+docker compose -f docker-compose.aws-test.yml logs --no-color --tail=200 || true
