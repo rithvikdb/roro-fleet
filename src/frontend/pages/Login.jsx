@@ -42,7 +42,7 @@ export default function Login() {
             RORO <span style={{ color:'var(--t2)' }}>FLEET</span>
           </div>
           <div style={{ fontSize:'10px', color:'var(--t3)', marginTop:'6px', letterSpacing:'1px' }}>
-            VESSEL PERFORMANCE PLATFORM
+            VESSEL OPERATIONS MANAGEMENT SYSTEM
           </div>
         </div>
 
